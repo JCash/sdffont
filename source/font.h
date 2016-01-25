@@ -11,7 +11,7 @@ struct SFontGlyph
 
 struct SFontPairKerning
 {
-	uint64_t	key;		// (codepoint1 << 32) | codepoint2
+	uint64_t	key;		// (codepoint2 << 32) | codepoint1
 	float		kerning;	// texel coords
 };
 
@@ -39,3 +39,9 @@ bool operator< (const SFontGlyph& lhs, const SFontGlyph& rhs)
 {
 	return lhs.codepoint < rhs.codepoint;
 }
+
+bool operator< (const SFontPairKerning& lhs, const SFontPairKerning& rhs)
+{
+	return lhs.key < rhs.key;
+}
+

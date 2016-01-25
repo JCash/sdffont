@@ -29,10 +29,6 @@
 #include <map>
 
 
-extern void computegradient(double *img, int w, int h, double *gx, double *gy);
-extern void edtaa4(double *img, double *gx, double *gy, int w, int h, short *distx, short *disty, double *dist);
-extern void postprocess(double *img, double *gximg, double *gyimg, int w, int h, short *distx, short *disty, double *dist);
-
 static void Usage()
 {
 	printf("Usage: sdffont [options]\n");
@@ -110,6 +106,7 @@ static int WriteFontInfo(const stbtt_fontinfo* info, const char* path, int width
 						std::vector<SFontGlyph>& glyphs, std::vector<SFontPairKerning>& pairkernings)
 {
 	std::sort(glyphs.begin(), glyphs.end());
+	std::sort(pairkernings.begin(), pairkernings.end());
 
 	SFontHeader header = {};
 	header.magic[0] 			= 'F';
@@ -237,10 +234,13 @@ STBTT_DEF int stbtt_GetGlyphNumPairKernings(const stbtt_fontinfo* info)
       return 0;
    if (ttUSHORT(data+2) < 1) // number of tables, need at least 1
       return 0;
-   if ((ttUSHORT(data+8) & 1) != 1) // horizontal flag must be set in format
+   unsigned short coverage = ttUSHORT(data+8);
+   if ((coverage & 1) != 1) // horizontal flag must be set in format
       return 0;
-
-   return ttUSHORT(data+10);
+   unsigned short format = coverage >> 8;
+   if( format == 0 )
+	   return ttUSHORT(data+10);
+   return 0;
 }
 
 STBTT_DEF int stbtt_GetGlyphPairKerning(const stbtt_fontinfo* info, int index, int* glyph1, int* glyph2, int* pairkerning)
@@ -558,7 +558,7 @@ int main(int argc, const char** argv)
 		float lineascent = _lineascent * fontscale;
 
 		std::vector<SFontGlyph> outglyphs;
-		std::vector<SFontPairKerning> pairkernings;
+		std::map<int, int> glyph_to_codepoint;
 
 		uint64_t totaltime = 0;
 		uint64_t totaltimesdf = 0;
@@ -574,6 +574,7 @@ int main(int argc, const char** argv)
 		{
 			int codepoint = packrects[i].id;
 			int glyph = stbtt_FindGlyphIndex(&f, codepoint);
+			glyph_to_codepoint.insert( std::make_pair(glyph, codepoint) );
 
 			uint32_t bitmapwidth  	= packrects[i].w * numoversampling;
 			uint32_t bitmapheight	= packrects[i].h * numoversampling;
@@ -635,16 +636,12 @@ int main(int argc, const char** argv)
 
 			CopyBitmap(bitmapsdf, bitmapwidth/numoversampling, bitmapheight/numoversampling, imageout, imagewidth, imageheight, packrects[i].x, packrects[i].y);
 
-			//CopyBitmap(bitmap, bitmapwidth, bitmapheight, imageout, imagewidth, imageheight, packrects[i].x, packrects[i].y);
-
-			//printf("%d SDF took %llu us\n", glyph, te-ts);
-
 			int advance;
 			int bearingx;
 			stbtt_GetGlyphHMetrics(&f, glyph, &advance, &bearingx);
 
 			int x1, y1, x2, y2;
-			stbtt_GetCodepointBitmapBox(&f, codepoint, fontscale, fontscale, &x1, &y1, &x2, &y2);
+			stbtt_GetGlyphBitmapBox(&f, glyph, fontscale, fontscale, &x1, &y1, &x2, &y2);
 
 			SFontGlyph outglyph;
 
@@ -659,8 +656,7 @@ int main(int argc, const char** argv)
 			outglyph.bearing_x	= (bearingx * scale) / numoversampling;
 			outglyphs.push_back(outglyph);
 
-			/*
-			if( codepoint == 'g' || codepoint == 'A' || codepoint == 'd' || codepoint == '~' )
+			/*if( codepoint == 'T' || codepoint == 'a' || codepoint == 'e')
 			{
 				printf("%c  codepoint = %d\n", (char)codepoint, codepoint);
 				printf("  box = t,l: %d, %d  b,r: %d, %d\n", outglyph.box[0], outglyph.box[1], outglyph.box[2], outglyph.box[3]);
@@ -690,148 +686,29 @@ int main(int argc, const char** argv)
 
 		free(imageout);
 
-		/*
+		std::vector<SFontPairKerning> pairkernings;
 		int numpairkernings = stbtt_GetGlyphNumPairKernings(&f);
 		for( int i = 0; i < numpairkernings; ++i )
 		{
 			int glyph1, glyph2, kerning;
 			stbtt_GetGlyphPairKerning(&f, i, &glyph1, &glyph2, &kerning);
 
+			std::map<int, int>::const_iterator it1 = glyph_to_codepoint.find(glyph1);
+			std::map<int, int>::const_iterator it2 = glyph_to_codepoint.find(glyph2);
+			if( it1 == glyph_to_codepoint.end() || it2 == glyph_to_codepoint.end() )
+				continue;
+
 			SFontPairKerning pairkerning;
-			pairkerning.key		= (uint64_t(glyph_to_codepoint[glyph1]) << 32) | glyph_to_codepoint[glyph2];
-			pairkerning.kerning = kerning * fontscale;
+			pairkerning.key		= (uint64_t(it2->second) << 32) | it1->second;
+			pairkerning.kerning = (kerning * fontscale) / numoversampling;
 			pairkernings.push_back( pairkerning );
 
-			//printf("pk %c %c   %d\n", glyph_to_codepoint[glyph1], glyph_to_codepoint[glyph2], kerning);
-		}*/
+			//printf("pk %c %c   %f 0x%016llx (%d  %d),  (%d  %d)\n", it1->second, it2->second, kerning * fontscale, pairkerning.key, it1->second, it2->second, glyph1, glyph2);
+		}
 
 		WriteFontInfo(&f, outputfile, imagewidth, imageheight, fontsize, outglyphs, pairkernings);
 		printf("Wrote %s\n", outputfile);
 	}
-
-	/*
-	if(0)
-	{
-		stbtt_packedchar pdata[256*2];
-
-		stbtt_pack_context pc;
-		stbtt_pack_range pr[2];
-
-		pr[0].chardata_for_range = pdata;
-		pr[0].first_unicode_codepoint_in_range = 32;
-		pr[0].num_chars = 1;
-		pr[0].num_chars = 95;
-		pr[0].array_of_unicode_codepoints = 0;
-		pr[0].font_size = (float)fontsize*(1<<numoversampling);
-		pr[1].chardata_for_range = pdata+256;
-		pr[1].first_unicode_codepoint_in_range = 0xa0;
-		pr[1].num_chars = 0x100 - 0xa0;
-		pr[1].array_of_unicode_codepoints = 0;
-		pr[1].font_size = (float)fontsize*(1<<numoversampling);
-
-		stbtt_PackBegin(&pc, image, bigwidth, bigheight, 0, radius*2, NULL);
-		//if( numoversampling > 1 )
-		//	stbtt_PackSetOversampling(&pc, numoversampling, numoversampling);
-		stbtt_PackFontRanges(&pc, fontfile, 0, pr, 2);
-		stbtt_PackEnd(&pc);
-
-		sdfBuildDistanceField(imagedist, bigwidth, (float)radius * (1 << numoversampling), image, bigwidth, bigheight, bigwidth);
-
-		unsigned char* imagetmp1 = (unsigned char*)malloc(bigimagesize);
-		unsigned char* imagetmp2 = (unsigned char*)malloc(bigimagesize);
-		memcpy(imagetmp1, imagedist, bigimagesize);
-
-		int w = width * (1 << numoversampling);
-		int h = height * (1 << numoversampling);
-		while( w > width )
-		{
-			half_size(imagetmp1, w, h, imagetmp2);
-			memcpy(imagetmp1, imagetmp2, (w * h) / 4);
-
-			w >>= 1;
-			h >>= 1;
-		}
-		//memcpy(imageout, imagetmp1, width*height);
-
-		int glyph_to_codepoint[65536];
-		memset(glyph_to_codepoint, 0, sizeof(glyph_to_codepoint));
-
-		stbtt_fontinfo font;
-		stbtt_InitFont(&font, fontfile, stbtt_GetFontOffsetForIndex(fontfile,0));
-
-		std::vector<SFontGlyph> outglyphs;
-		outglyphs.reserve( pr[0].num_chars + pr[1].num_chars );
-
-		std::vector<SFontPairKerning> pairkernings;
-
-
-		int lineascent, linedescend, linegap;
-		stbtt_GetFontVMetrics(&font, &lineascent, &linedescend, &linegap);
-
-		float fontscale = stbtt_ScaleForPixelHeight(&font, fontsize*(1 << numoversampling));
-
-		float upfactor = 1 << numoversampling;
-		float ooDownsample = 1.0f / upfactor;
-
-		for( int r = 0; r < 2; ++r )
-		{
-			for( int i = 0; i < pr[r].num_chars; ++i )
-			{
-				stbtt_packedchar& c = pr[r].chardata_for_range[i];
-
-				int codepoint = pr[r].first_unicode_codepoint_in_range + i;
-				int glyphindex = stbtt_FindGlyphIndex(&font, codepoint);
-
-				glyph_to_codepoint[glyphindex] = codepoint;
-
-				int advance;
-				int bearingx;
-				stbtt_GetGlyphHMetrics(&font, glyphindex, &advance, &bearingx);
-
-				SFontGlyph glyph;
-
-				glyph.codepoint = codepoint;
-				glyph.box[0]	= c.x0 * ooDownsample;
-				glyph.box[1]	= c.y0 * ooDownsample;
-				glyph.box[2]	= c.x1 * ooDownsample;
-				glyph.box[3]	= c.y1 * ooDownsample;
-				glyph.offset[0]	= c.xoff * ooDownsample;
-				glyph.offset[1]	= c.yoff2 * ooDownsample;
-				glyph.advance	= (advance * fontscale) * ooDownsample;
-				glyph.bearing_x	= (bearingx * fontscale) * ooDownsample;
-				outglyphs.push_back(glyph);
-
-				//DrawBox(glyph.box[0], glyph.box[1], glyph.box[2], glyph.box[3], imageout, width, height);
-
-				//printf("%c  advance: %d   packed: %f\n", codepoint, advance, c.xadvance);
-				//printf("    xoff, yoff:  %f, %f    xoff2, yoff2: %f, %f\n", c.xoff, c.yoff, c.xoff2, c.yoff2);
-			}
-		}
-
-		int numpairkernings = stbtt_GetGlyphNumPairKernings(&font);
-		for( int i = 0; i < numpairkernings; ++i )
-		{
-			int glyph1, glyph2, kerning;
-			stbtt_GetGlyphPairKerning(&font, i, &glyph1, &glyph2, &kerning);
-
-			SFontPairKerning pairkerning;
-			pairkerning.key		= (uint64_t(glyph_to_codepoint[glyph1]) << 32) | glyph_to_codepoint[glyph2];
-			pairkerning.kerning = kerning * fontscale;
-			pairkernings.push_back( pairkerning );
-
-			//printf("pk %c %c   %d\n", glyph_to_codepoint[glyph1], glyph_to_codepoint[glyph2], kerning);
-		}
-
-		WriteFontInfo(&font, outputfile, width, height, fontsize, outglyphs, pairkernings);
-		printf("Wrote %s\n", outputfile);
-	}
-
-	char path[512];
-	sprintf(path, "%s.png", outputfile);
-	stbi_write_png(path, width, height, 1, imageout, 0);
-	printf("Wrote %s\n", path);
-	free(image);
-	*/
 
 	return 0;
 }
