@@ -11,9 +11,6 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
-#define STB_RECT_PACK_IMPLEMENTATION
-#include "stb_rect_pack.h"
-
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "stb_truetype.h"
 
@@ -102,7 +99,7 @@ static void AlignFile8(FILE* file)
 		fwrite(&c, 1, 1, file);
 }
 
-static int WriteFontInfo(const stbtt_fontinfo* info, const char* path, int width, int height, int fontsize,
+static int WriteFontInfo(const stbtt_fontinfo* info, const char* path, int width, int height, int fontsize, int radius,
 						std::vector<SFontGlyph>& glyphs, std::vector<SFontPairKerning>& pairkernings)
 {
 	std::sort(glyphs.begin(), glyphs.end());
@@ -116,6 +113,7 @@ static int WriteFontInfo(const stbtt_fontinfo* info, const char* path, int width
 	header.texturesize_width	= width;
 	header.texturesize_height	= height;
 	header.fontsize				= fontsize;
+	header.radius				= radius;
 
 	float fontscale = stbtt_ScaleForPixelHeight(info, fontsize);
 
@@ -224,21 +222,21 @@ static void half_size(const uint8_t* image, int width, int height, uint8_t* out)
 }
 
 // https://www.microsoft.com/en-us/Typography/SpecificationsOverview.aspx -> ttch02.doc
-
-STBTT_DEF int stbtt_GetGlyphNumPairKernings(const stbtt_fontinfo* info)
+/*
+STBTT_DEF int stbtt_GetNumGlyphPairKernings(const stbtt_fontinfo* info)
 {
    stbtt_uint8 *data = info->data + info->kern;
+   unsigned short coverage;
 
    // we only look at the first table. it must be 'horizontal' and format 0.
    if (!info->kern)
       return 0;
    if (ttUSHORT(data+2) < 1) // number of tables, need at least 1
       return 0;
-   unsigned short coverage = ttUSHORT(data+8);
+   coverage = ttUSHORT(data+8);
    if ((coverage & 1) != 1) // horizontal flag must be set in format
       return 0;
-   unsigned short format = coverage >> 8;
-   if( format == 0 )
+   if( (coverage >> 8) == 0 ) // format
 	   return ttUSHORT(data+10);
    return 0;
 }
@@ -246,6 +244,7 @@ STBTT_DEF int stbtt_GetGlyphNumPairKernings(const stbtt_fontinfo* info)
 STBTT_DEF int stbtt_GetGlyphPairKerning(const stbtt_fontinfo* info, int index, int* glyph1, int* glyph2, int* pairkerning)
 {
    stbtt_uint8 *data = info->data + info->kern;
+   int combination;
 
    // we only look at the first table. it must be 'horizontal' and format 0.
    if (!info->kern)
@@ -254,16 +253,15 @@ STBTT_DEF int stbtt_GetGlyphPairKerning(const stbtt_fontinfo* info, int index, i
       return 0;
    if ((ttUSHORT(data+8) & 1) != 1) // horizontal flag must be set in format
       return 0;
-
    if( index < 0 || index >= ttUSHORT(data+10) )
 	   return 0;
 
-   *pairkerning = ttSHORT(data+22+(index*6));
-   int combination = ttULONG(data+18+(index*6)); // note: unaligned read
-   *glyph1 = combination >> 16;
-   *glyph2 = combination & 0xFFFF;
+   combination = ttULONG(data+18+(index*6)); // note: unaligned read
+   if(pairkerning) 	*pairkerning = ttSHORT(data+22+(index*6));
+   if(glyph1)		*glyph1 = combination >> 16;
+   if(glyph2)		*glyph2 = combination & 0xFFFF;
    return 1;
-}
+}*/
 
 uint64_t gettime()
 {
@@ -555,20 +553,26 @@ int main(int argc, const char** argv)
 		float fontscale = stbtt_ScaleForPixelHeight(&f, fontsize*numoversampling);
 		int _lineascent, _linedescend, _linegap;
 		stbtt_GetFontVMetrics(&f, &_lineascent, &_linedescend, &_linegap);
-		float lineascent = _lineascent * fontscale;
-
+		
 		std::vector<SFontGlyph> outglyphs;
 		std::map<int, int> glyph_to_codepoint;
 
 		uint64_t totaltime = 0;
 		uint64_t totaltimesdf = 0;
 
-		uint32_t maxglyphwidth = radius * 2 + padding[0] * 2 + fontsize * numoversampling;
-		uint32_t maxglyphheight = radius * 2 + padding[1] * 2 + fontsize * numoversampling;
-		unsigned char* sdftemp = (unsigned char*)malloc(maxglyphwidth*maxglyphheight*sizeof(float)*3);
+		uint32_t maxglyphsize = 0;
+		for( int i = 0; i < numrects; ++i)
+		{
+			maxglyphsize = packrects[i].w > maxglyphsize ? packrects[i].w : maxglyphsize;
+			maxglyphsize = packrects[i].h > maxglyphsize ? packrects[i].h : maxglyphsize;
+		}
+		maxglyphsize += (padding[0] > padding[1] ? padding[0] : padding[1]) * 2 + radius;
+		maxglyphsize *= numoversampling;
+		
+		unsigned char* sdftemp = (unsigned char*)malloc(maxglyphsize*maxglyphsize*sizeof(float)*3);
 
-		unsigned char* bitmap = new unsigned char[maxglyphwidth*maxglyphheight];
-		unsigned char* bitmapsdf = new unsigned char[maxglyphwidth*maxglyphheight];
+		unsigned char* bitmap = new unsigned char[maxglyphsize*maxglyphsize];
+		unsigned char* bitmapsdf = new unsigned char[maxglyphsize*maxglyphsize];
 
 		for( int i = 0; i < numrects; ++i)
 		{
@@ -591,8 +595,8 @@ int main(int argc, const char** argv)
 			uint64_t te = gettime();
 			totaltime += te - ts;
 
-			assert(maxglyphwidth >= bitmapwidth);
-			assert(maxglyphheight >= bitmapheight);
+			assert(maxglyphsize >= bitmapwidth);
+			assert(maxglyphsize >= bitmapheight);
 
 			/*
 			int bmsize = bitmapwidth*bitmapheight;
@@ -672,7 +676,7 @@ int main(int argc, const char** argv)
 		delete[] bitmap;
 		delete[] bitmapsdf;
 
-		printf("Max bitmap size: %d, %d\n", maxglyphwidth, maxglyphheight);
+		printf("Max bitmap size: %d, %d\n", maxglyphsize, maxglyphsize);
 		printf("Average %llu us\n", totaltime/numrects);
 		printf("Average sdf %llu us\n", totaltimesdf/numrects);
 		printf("Total %llu us for %d glyphs\n", totaltime, numrects);
@@ -687,17 +691,22 @@ int main(int argc, const char** argv)
 		free(imageout);
 
 		std::vector<SFontPairKerning> pairkernings;
-		int numpairkernings = stbtt_GetGlyphNumPairKernings(&f);
+		int numpairkernings = stbtt_GetNumGlyphKernings(&f);
 		for( int i = 0; i < numpairkernings; ++i )
 		{
 			int glyph1, glyph2, kerning;
-			stbtt_GetGlyphPairKerning(&f, i, &glyph1, &glyph2, &kerning);
+			stbtt_GetGlyphKerning(&f, i, &glyph1, &glyph2, &kerning);
 
 			std::map<int, int>::const_iterator it1 = glyph_to_codepoint.find(glyph1);
 			std::map<int, int>::const_iterator it2 = glyph_to_codepoint.find(glyph2);
 			if( it1 == glyph_to_codepoint.end() || it2 == glyph_to_codepoint.end() )
 				continue;
 
+			if( it1->second < ranges[0] || it1->second >= ranges[1] )
+				continue;
+			if( it2->second < ranges[0] || it2->second >= ranges[1] )
+				continue;
+			
 			SFontPairKerning pairkerning;
 			pairkerning.key		= (uint64_t(it2->second) << 32) | it1->second;
 			pairkerning.kerning = (kerning * fontscale) / numoversampling;
@@ -705,8 +714,10 @@ int main(int argc, const char** argv)
 
 			//printf("pk %c %c   %f 0x%016llx (%d  %d),  (%d  %d)\n", it1->second, it2->second, kerning * fontscale, pairkerning.key, it1->second, it2->second, glyph1, glyph2);
 		}
+		
+		printf("num pair kernings: %llu\n", (uint64_t)pairkernings.size());
 
-		WriteFontInfo(&f, outputfile, imagewidth, imageheight, fontsize, outglyphs, pairkernings);
+		WriteFontInfo(&f, outputfile, imagewidth, imageheight, fontsize, radius, outglyphs, pairkernings);
 		printf("Wrote %s\n", outputfile);
 	}
 

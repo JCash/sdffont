@@ -20,13 +20,14 @@ struct SFontHeader
 	char		magic[4];
 	uint16_t	texturesize_width;
 	uint16_t	texturesize_height;
-	uint16_t	fontsize;		// In pixels
+	uint16_t	fontsize;		// pixels
+	uint16_t	radius;			// pixels
 	float		line_ascend;	// pixels
 	float		line_descend; 	// pixels
 	float		line_gap; 		// pixels
 	uint16_t	num_glyphs;
 	uint16_t	num_pairkernings;
-	uint8_t		_pad[8];
+	uint8_t		_pad[4];
 	// 24 bytes
 	// Offsets into the file where to find data (0 based, i.e from beginning of file)
 	uint64_t	codepoints;		// num_glyphs long list of sorted code points. Used to determine glyph index for a code point
