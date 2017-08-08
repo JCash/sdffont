@@ -10,5 +10,7 @@ set -e
 
 time ./sdffont -i ../minosaur/content/fonts/legendum/Legendum.ttf -o output.font -s 96 -r 10 --paddingleft 1 --paddingright 1 --paddingtop 1 --paddingbottom 1 --numoversampling 2
 
+time ./sdffont -i ../minosaur/content/fonts/inconsolata/inconsolata.bold.ttf -o ../minosaur/content/fonts/inconsolata/inconsolata.bold.font -s 20 -r 4 --paddingleft 1 --paddingright 1 --paddingtop 1 --paddingbottom 1 --numoversampling 1
+
 cp output.font ../minosaur/content/fonts/test.font
 cp output.font.png ../minosaur/content/fonts/test.png
